@@ -22,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
+
 	apiv1alpha1 "github.com/openmcp-project/service-provider-kro/api/v1alpha1"
 	"github.com/openmcp-project/service-provider-kro/pkg/spruntime"
 )
@@ -37,13 +38,13 @@ type KroReconciler struct {
 }
 
 // CreateOrUpdate is called on every add or update event
-func (r *KroReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.Kro, _ *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *KroReconciler) CreateOrUpdate(_ context.Context, _ *apiv1alpha1.Kro, _ *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
 	// TODO
 	return ctrl.Result{}, nil
 }
 
 // Delete is called on every delete event
-func (r *KroReconciler) Delete(ctx context.Context, obj *apiv1alpha1.Kro, _ *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *KroReconciler) Delete(_ context.Context, _ *apiv1alpha1.Kro, _ *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
 	// TODO
 	return ctrl.Result{}, nil
 }
