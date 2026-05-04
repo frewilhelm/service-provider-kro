@@ -109,6 +109,7 @@ func (r *KroReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 	} else {
 		spruntime.StatusProgressing(svcobj, "Reconciling", "Waiting for managed resources to become ready")
 	}
+	// The SPReconciler wrapper applies PollInterval as a fallback RequeueAfter.
 	return ctrl.Result{}, nil
 }
 
