@@ -30,6 +30,8 @@ import (
 	"github.com/openmcp-project/openmcp-operator/lib/clusteraccess"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -95,8 +97,18 @@ func (r *KroReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 
 	l.Info("Done reconciling Kro resource", "name", svcobj.Name)
 
-	svcobj.Status.Resources = managedResources(tenantNamespace, apiv1alpha1.Ready)
-	spruntime.StatusReady(svcobj)
+	resources, err := r.observeManagedResources(ctx, tenantNamespace)
+	if err != nil {
+		spruntime.StatusProgressing(svcobj, spruntime.StatusPhaseFailed, err.Error())
+		return ctrl.Result{}, fmt.Errorf("failed to observe managed resources: %w", err)
+	}
+	svcobj.Status.Resources = resources
+
+	if allReady(resources) {
+		spruntime.StatusReady(svcobj)
+	} else {
+		spruntime.StatusProgressing(svcobj, "Reconciling", "Waiting for managed resources to become ready")
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -173,6 +185,102 @@ func managedResources(tenantNamespace string, phase apiv1alpha1.InstancePhase) [
 			Location: apiv1alpha1.PlatformCluster,
 		},
 	}
+}
+
+// observeManagedResources queries the platform cluster for the actual state of
+// managed Flux resources and returns them with their observed lifecycle phase.
+func (r *KroReconciler) observeManagedResources(ctx context.Context, tenantNamespace string) ([]apiv1alpha1.ManagedResource, error) {
+	ns := tenantNamespace
+	ociGroup := sourcev1.GroupVersion.Group
+	helmGroup := helmv2.GroupVersion.Group
+	platformClient := r.PlatformCluster.Client()
+
+	ociPhase, ociMsg, ociErr := observeFluxResourcePhase(ctx, platformClient,
+		client.ObjectKey{Name: OCIRepositoryName, Namespace: tenantNamespace},
+		&sourcev1.OCIRepository{})
+	if ociErr != nil {
+		return nil, fmt.Errorf("observing OCIRepository: %w", ociErr)
+	}
+
+	hrPhase, hrMsg, hrErr := observeFluxResourcePhase(ctx, platformClient,
+		client.ObjectKey{Name: HelmReleaseName, Namespace: tenantNamespace},
+		&helmv2.HelmRelease{})
+	if hrErr != nil {
+		return nil, fmt.Errorf("observing HelmRelease: %w", hrErr)
+	}
+
+	return []apiv1alpha1.ManagedResource{
+		{
+			TypedObjectReference: corev1.TypedObjectReference{
+				APIGroup:  &ociGroup,
+				Kind:      "OCIRepository",
+				Name:      OCIRepositoryName,
+				Namespace: &ns,
+			},
+			Phase:    ociPhase,
+			Message:  ociMsg,
+			Location: apiv1alpha1.PlatformCluster,
+		},
+		{
+			TypedObjectReference: corev1.TypedObjectReference{
+				APIGroup:  &helmGroup,
+				Kind:      "HelmRelease",
+				Name:      HelmReleaseName,
+				Namespace: &ns,
+			},
+			Phase:    hrPhase,
+			Message:  hrMsg,
+			Location: apiv1alpha1.PlatformCluster,
+		},
+	}, nil
+}
+
+// observeFluxResourcePhase fetches a Flux resource from the cluster and derives
+// its InstancePhase from the standard Flux conditions (Ready, Stalled).
+func observeFluxResourcePhase(ctx context.Context, c client.Client, key client.ObjectKey, obj client.Object) (apiv1alpha1.InstancePhase, string, error) {
+	if err := c.Get(ctx, key, obj); err != nil {
+		if apierrors.IsNotFound(err) {
+			return apiv1alpha1.Pending, "Resource not yet created", nil
+		}
+		return apiv1alpha1.Unknown, "", err
+	}
+
+	condObj, ok := obj.(meta.ObjectWithConditions)
+	if !ok {
+		return apiv1alpha1.Unknown, "Resource does not expose conditions", nil
+	}
+
+	conditions := condObj.GetConditions()
+	if len(conditions) == 0 {
+		return apiv1alpha1.Progressing, "Waiting for first reconciliation", nil
+	}
+
+	if stalledCond := apimeta.FindStatusCondition(conditions, meta.StalledCondition); stalledCond != nil && stalledCond.Status == metav1.ConditionTrue {
+		return apiv1alpha1.Failed, stalledCond.Message, nil
+	}
+
+	readyCond := apimeta.FindStatusCondition(conditions, meta.ReadyCondition)
+	if readyCond == nil {
+		return apiv1alpha1.Progressing, "Ready condition not yet reported", nil
+	}
+
+	switch readyCond.Status {
+	case metav1.ConditionTrue:
+		return apiv1alpha1.Ready, readyCond.Message, nil
+	case metav1.ConditionFalse:
+		return apiv1alpha1.Progressing, readyCond.Message, nil
+	default:
+		return apiv1alpha1.Unknown, readyCond.Message, nil
+	}
+}
+
+func allReady(resources []apiv1alpha1.ManagedResource) bool {
+	for i := range resources {
+		if resources[i].Phase != apiv1alpha1.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *KroReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectName string) (*meta.SecretKeyReference, error) {

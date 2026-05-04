@@ -102,8 +102,14 @@ func TestServiceProvider(t *testing.T) {
 				switch r.Kind {
 				case "OCIRepository":
 					hasOCI = true
+					if r.Phase != apiv1alpha1.Ready {
+						t.Errorf("OCIRepository phase is %q, want %q", r.Phase, apiv1alpha1.Ready)
+					}
 				case "HelmRelease":
 					hasHelm = true
+					if r.Phase != apiv1alpha1.Ready {
+						t.Errorf("HelmRelease phase is %q, want %q", r.Phase, apiv1alpha1.Ready)
+					}
 				}
 			}
 			if !hasOCI {
